@@ -1,0 +1,8 @@
+interface:
+  display_name: "ClawRouter Bootstrap"
+  short_description: "CLI bootstrap for ClawRouter signup, login, tokens, and checkout links."
+  default_prompt: "Use $clawrouter-account-bootstrap to register or log in to a ClawRouter instance and create a usable API token."
+
+policy:
+  allow_implicit_invocation: true
+
