@@ -212,25 +212,12 @@ Replace `TARGET_MODEL_ID` with the actual model ID. After switching, tell the us
 ### Check balance and usage
  
 When the user asks "how much credit do I have", "還有多少額度", "餘額":
- 
 ```bash
-node -e "
-const f=process.env.HOME+'/.openclaw/openclaw.json';
-const c=require(f);
-const key=c.models.providers.clawrouter.apiKey;
-fetch('https://clawrouter.com/api/user/self',{headers:{Authorization:key,'New-API-User':'0'}})
-  .then(r=>r.json())
-  .then(d=>{
-    if(d.data){
-      const q=d.data.quota||0;
-      const u=d.data.used_quota||0;
-      const r=q-u;
-      console.log('Total quota: $'+(q/500000).toFixed(2));
-      console.log('Used: $'+(u/500000).toFixed(2));
-      console.log('Remaining: $'+(r/500000).toFixed(2));
-    } else console.log('Unable to fetch balance');
-  }).catch(e=>console.log('Error:',e.message));
-"
+KEY=$(node -e "const c=require('$HOME/.openclaw/openclaw.json');console.log(c.models.providers.clawrouter.apiKey)")
+echo "=== 餘額 ==="
+curl -s "https://clawrouter.com/v1/dashboard/billing/subscription" -H "Authorization: Bearer $KEY" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const r=JSON.parse(d);console.log('額度上限: \$'+r.hard_limit_usd)})"
+echo "=== 用量 ==="
+curl -s "https://clawrouter.com/v1/dashboard/billing/usage" -H "Authorization: Bearer $KEY" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const r=JSON.parse(d);console.log('已使用: \$'+r.total_usage.toFixed(4))})"
 ```
  
 Note: The quota values from the API are in internal units. Divide by 500000 to get approximate USD value.
