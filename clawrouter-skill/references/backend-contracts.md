@@ -6,7 +6,7 @@ This skill is built against the current ClawRouter backend routes already presen
 
 - `GET /api/status`
   - Source: `controller/misc.go`
-  - Used to detect `turnstile_check`, `email_verification`, server address, and other runtime gates.
+  - Used to detect `turnstile_check`, `email_verification`, `quota_display_type`, server address, and other runtime gates.
 
 - `POST /api/user/register`
   - Source: `controller/user.go`
@@ -26,15 +26,21 @@ This skill is built against the current ClawRouter backend routes already presen
   - Body: `{ "code": "123456" }`
 
 - `GET /api/user/self`
+  - Source: `controller/user.go`
   - Authenticated route.
   - Requires `New-API-User` header matching the logged-in user id.
+  - Returns user-level `quota`, `used_quota`, and profile metadata.
+
+- `GET /api/user/models`
+  - Source: `controller/user.go`
+  - Returns the model ids visible to the authenticated user across usable groups.
 
 - `GET /api/user/token`
   - Source: `controller/user.go`
   - Generates a management access token for the user.
   - Important: `middleware/auth.go` reads this management token from the raw `Authorization` header value, not `Bearer ...`.
 
-## API Token Routes
+## API Token and Billing Routes
 
 - `POST /api/token/`
   - Source: `controller/token.go`
@@ -52,6 +58,22 @@ This skill is built against the current ClawRouter backend routes already presen
 - `GET /api/token/search?keyword=<name>&token=`
   - Source: `controller/token.go`, `model/token.go`
   - Used by the script after token creation to fetch the created token row and reconstruct the user-facing `sk-...` key.
+
+- `GET /api/usage/token/`
+  - Source: `controller/token.go`
+  - Requires bearer API key auth.
+  - Returns token-level totals such as `total_granted`, `total_used`, `total_available`, `unlimited_quota`, and `model_limits`.
+
+- `GET /v1/models`
+  - Source: `router/relay-router.go`, `controller/model.go`
+  - Requires bearer API key auth.
+  - Returns the models visible to the token, including token model-limit filtering when enabled.
+
+- `GET /v1/dashboard/billing/subscription`
+- `GET /v1/dashboard/billing/usage`
+  - Source: `router/dashboard.go`, `controller/billing.go`
+  - Require bearer API key auth.
+  - `controller/billing.go` switches between token-level and user-level quota semantics based on `common.DisplayTokenStatEnabled`.
 
 ## Payment Routes
 

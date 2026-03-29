@@ -3,12 +3,15 @@
 import process from 'node:process';
 import { parseArgs } from 'node:util';
 
-const HELP_TEXT = `ClawRouter account bootstrap CLI
+const HELP_TEXT = `ClawRouter self-service CLI
 
 Usage:
-  node skills/clawrouter-account-bootstrap/scripts/clawrouter-account-bootstrap.mjs status [--base-url <url>] [--output json|pretty]
-  node skills/clawrouter-account-bootstrap/scripts/clawrouter-account-bootstrap.mjs bootstrap [--base-url <url>] --username <name> --password <password> [options]
-  node skills/clawrouter-account-bootstrap/scripts/clawrouter-account-bootstrap.mjs payment-link [--base-url <url>] [auth options] --provider epay|stripe|creem|x402 [provider options]
+  node scripts/clawrouter-account-bootstrap.mjs status [--base-url <url>] [--output json|pretty]
+  node scripts/clawrouter-account-bootstrap.mjs bootstrap [--base-url <url>] --username <name> --password <password> [options]
+  node scripts/clawrouter-account-bootstrap.mjs account [--base-url <url>] [auth options] [--include-models true|false] [--output json|pretty]
+  node scripts/clawrouter-account-bootstrap.mjs models [--base-url <url>] [auth options | --api-key <sk>] [--model <id>] [--output json|pretty]
+  node scripts/clawrouter-account-bootstrap.mjs billing [--base-url <url>] --api-key <sk> [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--output json|pretty]
+  node scripts/clawrouter-account-bootstrap.mjs payment-link [--base-url <url>] [auth options] --provider epay|stripe|creem|x402 [provider options]
 
 Auth options:
   --username <name>
@@ -17,6 +20,7 @@ Auth options:
   --twofa-code <code>
   --access-token <token>
   --user-id <id>
+  --api-key <token>
 
 Bootstrap options:
   --register-mode always|if-missing|never   Default: if-missing
@@ -31,6 +35,16 @@ Bootstrap options:
   --token-group <group>
   --token-model-limits <a,b,c>
   --token-allow-ips <ip1,ip2 or newline text>
+
+Account options:
+  --include-models true|false               Default: false
+
+Model options:
+  --model <id>                              Optional. With --api-key calls /v1/models/:model; otherwise filters /api/user/models.
+
+Billing options:
+  --start-date <YYYY-MM-DD>                 Optional. Passed to /v1/dashboard/billing/usage.
+  --end-date <YYYY-MM-DD>                   Optional. Passed to /v1/dashboard/billing/usage.
 
 Payment options:
   --provider epay|stripe|creem|x402
@@ -103,6 +117,7 @@ class ClawRouterClient {
     this.cookieJar = new CookieJar();
     this.userId = null;
     this.accessToken = null;
+    this.apiKey = null;
   }
 
   setUserId(userId) {
@@ -114,11 +129,21 @@ class ClawRouterClient {
     this.setUserId(userId);
   }
 
-  buildHeaders({ auth = false } = {}) {
+  setApiKey(apiKey) {
+    this.apiKey = normalizeApiKey(apiKey);
+  }
+
+  buildHeaders({ auth = false, apiKey = false } = {}) {
     const headers = { Accept: 'application/json' };
     const cookieHeader = this.cookieJar.toHeader();
     if (cookieHeader) {
       headers.Cookie = cookieHeader;
+    }
+    if (auth && apiKey) {
+      throw new ClawRouterError(
+        'Cannot use management auth and API key auth on the same request.',
+        { step: 'auth-header' },
+      );
     }
     if (auth) {
       if (!Number.isInteger(this.userId) || this.userId <= 0) {
@@ -131,11 +156,22 @@ class ClawRouterClient {
       if (this.accessToken) {
         headers.Authorization = this.accessToken;
       }
+    } else if (apiKey) {
+      if (!this.apiKey) {
+        throw new ClawRouterError('API key auth requires --api-key.', {
+          step: 'auth-header',
+        });
+      }
+      headers.Authorization = `Bearer ${this.apiKey}`;
     }
     return headers;
   }
 
-  async request(method, path, { query = null, body, auth = false } = {}) {
+  async request(
+    method,
+    path,
+    { query = null, body, auth = false, apiKey = false } = {},
+  ) {
     const url = new URL(`${this.baseUrl}${path}`);
     if (query) {
       for (const [key, value] of Object.entries(query)) {
@@ -146,7 +182,7 @@ class ClawRouterClient {
       }
     }
 
-    const headers = this.buildHeaders({ auth });
+    const headers = this.buildHeaders({ auth, apiKey });
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
     }
@@ -210,6 +246,13 @@ function normalizeAccessToken(accessToken) {
     return accessToken;
   }
   return accessToken.replace(/^Bearer\s+/i, '').trim();
+}
+
+function normalizeApiKey(apiKey) {
+  if (!apiKey) {
+    return apiKey;
+  }
+  return String(apiKey).replace(/^Bearer\s+/i, '').trim();
 }
 
 function parseBoolean(value, defaultValue = false) {
@@ -276,6 +319,20 @@ function parseCsv(value) {
     .filter(Boolean);
 }
 
+function parseDateString(value, fieldName) {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  const normalized = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    throw new ClawRouterError(
+      `Invalid ${fieldName} value: ${value}. Use YYYY-MM-DD.`,
+      { step: 'arguments' },
+    );
+  }
+  return normalized;
+}
+
 function assertSuccessEnvelope(response, step) {
   if (!response.body || typeof response.body !== 'object') {
     throw new ClawRouterError(
@@ -340,6 +397,8 @@ function summarizeStatus(status) {
     email_verification: Boolean(status.email_verification),
     passkey_login: Boolean(status.passkey_login),
     setup: Boolean(status.setup),
+    quota_display_type: status.quota_display_type || null,
+    self_use_mode_enabled: Boolean(status.self_use_mode_enabled),
   };
 }
 
@@ -405,6 +464,57 @@ async function fetchSelf(client) {
   const response = await client.request('GET', '/api/user/self', { auth: true });
   const envelope = assertSuccessEnvelope(response, 'self');
   return envelope.data;
+}
+
+async function fetchUserModels(client) {
+  const response = await client.request('GET', '/api/user/models', {
+    auth: true,
+  });
+  const envelope = assertSuccessEnvelope(response, 'user-models');
+  return Array.isArray(envelope.data) ? envelope.data : [];
+}
+
+async function fetchPublicModels(client, modelId) {
+  const path = modelId
+    ? `/v1/models/${encodeURIComponent(modelId)}`
+    : '/v1/models';
+  const response = await client.request('GET', path, {
+    apiKey: true,
+  });
+  return assertSuccessEnvelope(
+    response,
+    modelId ? 'public-model' : 'public-models',
+  );
+}
+
+async function fetchTokenUsage(client) {
+  const response = await client.request('GET', '/api/usage/token/', {
+    apiKey: true,
+  });
+  const envelope = assertSuccessEnvelope(response, 'token-usage');
+  return envelope.data ?? envelope;
+}
+
+async function fetchBillingSubscription(client) {
+  const response = await client.request(
+    'GET',
+    '/v1/dashboard/billing/subscription',
+    {
+      apiKey: true,
+    },
+  );
+  return assertSuccessEnvelope(response, 'billing-subscription');
+}
+
+async function fetchBillingUsage(client, options) {
+  const response = await client.request('GET', '/v1/dashboard/billing/usage', {
+    apiKey: true,
+    query: {
+      start_date: parseDateString(options.startDate, '--start-date'),
+      end_date: parseDateString(options.endDate, '--end-date'),
+    },
+  });
+  return assertSuccessEnvelope(response, 'billing-usage');
 }
 
 async function generateManagementAccessToken(client) {
@@ -772,6 +882,160 @@ async function runBootstrapCommand(options) {
   };
 }
 
+async function runAccountCommand(options) {
+  const client = new ClawRouterClient(options.baseUrl);
+  const status = await fetchStatus(client);
+  const authResult = await resolveAuthenticatedUser(client, status, options);
+  const user = await fetchSelf(client);
+  const includeModels = parseBoolean(options.includeModels, false);
+  const visibleModels = includeModels ? await fetchUserModels(client) : null;
+
+  return {
+    success: true,
+    command: 'account',
+    status: summarizeStatus(status),
+    auth: {
+      mode: authResult.auth_mode,
+      user_id: user.id,
+    },
+    user,
+    quota_summary: {
+      remaining_quota: user.quota,
+      used_quota: user.used_quota,
+      request_count: user.request_count,
+    },
+    visible_models: includeModels
+      ? {
+          scope: 'account',
+          count: visibleModels.length,
+          data: visibleModels,
+        }
+      : null,
+  };
+}
+
+async function runModelsCommand(options) {
+  const requestedModel = options.model?.trim();
+  const client = new ClawRouterClient(options.baseUrl);
+
+  if (options.apiKey) {
+    client.setApiKey(options.apiKey);
+    const envelope = await fetchPublicModels(client, requestedModel);
+
+    if (requestedModel) {
+      return {
+        success: true,
+        command: 'models',
+        auth: { mode: 'api-key' },
+        scope: 'token',
+        model: envelope,
+      };
+    }
+
+    const models = Array.isArray(envelope.data) ? envelope.data : [];
+    return {
+      success: true,
+      command: 'models',
+      auth: { mode: 'api-key' },
+      scope: 'token',
+      model_count: models.length,
+      models,
+    };
+  }
+
+  const status = await fetchStatus(client);
+  const authResult = await resolveAuthenticatedUser(client, status, options);
+  const visibleModels = await fetchUserModels(client);
+
+  if (requestedModel) {
+    const matchedModel = visibleModels.find((model) => model === requestedModel);
+    if (!matchedModel) {
+      throw new ClawRouterError(
+        `Model "${requestedModel}" is not visible to this authenticated user.`,
+        {
+          step: 'models',
+          details: {
+            available_models: visibleModels,
+          },
+        },
+      );
+    }
+    return {
+      success: true,
+      command: 'models',
+      status: summarizeStatus(status),
+      auth: {
+        mode: authResult.auth_mode,
+        user_id: client.userId,
+      },
+      scope: 'account',
+      model: matchedModel,
+    };
+  }
+
+  return {
+    success: true,
+    command: 'models',
+    status: summarizeStatus(status),
+    auth: {
+      mode: authResult.auth_mode,
+      user_id: client.userId,
+    },
+    scope: 'account',
+    model_count: visibleModels.length,
+    models: visibleModels,
+  };
+}
+
+async function runBillingCommand(options) {
+  if (!options.apiKey) {
+    throw new ClawRouterError('billing requires --api-key.', {
+      step: 'arguments',
+    });
+  }
+
+  const client = new ClawRouterClient(options.baseUrl);
+  client.setApiKey(options.apiKey);
+
+  const startDate = parseDateString(options.startDate, '--start-date');
+  const endDate = parseDateString(options.endDate, '--end-date');
+  const [tokenUsage, subscription, usage] = await Promise.all([
+    fetchTokenUsage(client),
+    fetchBillingSubscription(client),
+    fetchBillingUsage(client, { startDate, endDate }),
+  ]);
+
+  const hardLimitUsd =
+    typeof subscription.hard_limit_usd === 'number'
+      ? subscription.hard_limit_usd
+      : null;
+  const totalUsage =
+    typeof usage.total_usage === 'number' ? usage.total_usage / 100 : null;
+
+  return {
+    success: true,
+    command: 'billing',
+    auth: { mode: 'api-key' },
+    usage_window: {
+      start_date: startDate || null,
+      end_date: endDate || null,
+    },
+    token_usage: tokenUsage,
+    billing: {
+      subscription,
+      usage,
+      remaining_display_amount:
+        hardLimitUsd !== null && totalUsage !== null
+          ? hardLimitUsd - totalUsage
+          : null,
+    },
+    notes: [
+      'token_usage always reflects token quota.',
+      'dashboard billing endpoints may reflect token quota or user quota depending on DisplayTokenStatEnabled.',
+    ],
+  };
+}
+
 async function runPaymentLinkCommand(options) {
   const client = new ClawRouterClient(options.baseUrl);
   const status = await fetchStatus(client);
@@ -811,6 +1075,7 @@ function parseCli() {
       'twofa-code': { type: 'string' },
       'access-token': { type: 'string' },
       'user-id': { type: 'string' },
+      'api-key': { type: 'string' },
       'register-mode': { type: 'string' },
       email: { type: 'string' },
       'verification-code': { type: 'string' },
@@ -823,6 +1088,10 @@ function parseCli() {
       'token-group': { type: 'string' },
       'token-model-limits': { type: 'string' },
       'token-allow-ips': { type: 'string' },
+      'include-models': { type: 'string' },
+      model: { type: 'string' },
+      'start-date': { type: 'string' },
+      'end-date': { type: 'string' },
       provider: { type: 'string' },
       amount: { type: 'string' },
       'payment-method': { type: 'string' },
@@ -842,6 +1111,7 @@ function parseCli() {
     twofaCode: parsed.values['twofa-code'],
     accessToken: parsed.values['access-token'],
     userId: parsed.values['user-id'],
+    apiKey: parsed.values['api-key'],
     registerMode: parsed.values['register-mode'],
     email: parsed.values.email,
     verificationCode: parsed.values['verification-code'],
@@ -854,6 +1124,10 @@ function parseCli() {
     tokenGroup: parsed.values['token-group'],
     tokenModelLimits: parsed.values['token-model-limits'],
     tokenAllowIps: parsed.values['token-allow-ips'],
+    includeModels: parsed.values['include-models'],
+    model: parsed.values.model,
+    startDate: parsed.values['start-date'],
+    endDate: parsed.values['end-date'],
     provider: parsed.values.provider,
     amount: parsed.values.amount,
     paymentMethod: parsed.values['payment-method'],
@@ -878,6 +1152,15 @@ async function main() {
       break;
     case 'bootstrap':
       result = await runBootstrapCommand(options);
+      break;
+    case 'account':
+      result = await runAccountCommand(options);
+      break;
+    case 'models':
+      result = await runModelsCommand(options);
+      break;
+    case 'billing':
+      result = await runBillingCommand(options);
       break;
     case 'payment-link':
       if (!options.provider) {

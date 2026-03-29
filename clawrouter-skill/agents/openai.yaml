@@ -1,7 +1,7 @@
 interface:
-  display_name: "ClawRouter Bootstrap"
-  short_description: "CLI bootstrap for ClawRouter signup, login, tokens, and checkout links."
-  default_prompt: "Use $clawrouter-account-bootstrap to register or log in to a ClawRouter instance and create a usable API token."
+  display_name: "ClawRouter Self-Service"
+  short_description: "Inspect ClawRouter accounts, models, quota, tokens, and checkout links from the CLI."
+  default_prompt: "Use $clawrouter-skill to inspect a ClawRouter account, list available models, query quota or billing, bootstrap tokens, or create checkout links through the existing APIs."
 
 policy:
   allow_implicit_invocation: true
