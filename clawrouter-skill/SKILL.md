@@ -155,6 +155,85 @@ When a user asks how to call ClawRouter after bootstrap, prefer concrete example
 
 See [references/api-usage.md](references/api-usage.md) for concise endpoint guidance, including account inspection, quota semantics, and model switching guidance.
 
+## Model Management (Use This When the User Asks About Models)
+ 
+### List available models
+ 
+When the user asks "what models are available", "有什麼模型", "支援哪些模型", run:
+ 
+```bash
+curl -s https://clawrouter.com/v1/models \
+  -H "Authorization: Bearer $(node -e "const c=require('$HOME/.openclaw/openclaw.json');console.log(c.models.providers.clawrouter.apiKey)")" \
+  | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const m=JSON.parse(d).data;m.forEach(x=>console.log(x.id))})"
+```
+ 
+Present the results in a clean list grouped by provider:
+- **Anthropic**: claude-opus-4-6, claude-sonnet-4-20250514, claude-haiku-4-5-20251001
+- **OpenAI**: gpt-5, gpt-4o, gpt-4.1-mini
+- **Google**: gemini-2.5-flash, gemini-3.1-pro-preview
+- **DeepSeek**: deepseek-chat (cheapest option)
+ 
+### Check current model
+ 
+When the user asks "what model am I using", "現在用什麼模型", read the config:
+ 
+```bash
+node -e "const c=require('$HOME/.openclaw/openclaw.json');console.log('Current model:', c.agents.defaults.model.primary)"
+```
+ 
+### Switch model
+ 
+When the user asks to switch models, "切換到 X", "用 X 模型":
+ 
+1. First verify the requested model exists on ClawRouter (run the list command above)
+2. Update the config:
+ 
+```bash
+node -e "
+const fs=require('fs');
+const f=process.env.HOME+'/.openclaw/openclaw.json';
+const c=JSON.parse(fs.readFileSync(f,'utf8'));
+const MODEL_ID='TARGET_MODEL_ID';
+// Add model to provider if not present
+const models=c.models.providers.clawrouter.models;
+if(!models.find(m=>m.id===MODEL_ID)){
+  models.push({id:MODEL_ID,name:MODEL_ID,contextWindow:200000,maxTokens:8192});
+}
+// Set as primary
+c.agents.defaults.model.primary='clawrouter/'+MODEL_ID;
+c.agents.defaults.models={'clawrouter/'+MODEL_ID:{}};
+fs.writeFileSync(f,JSON.stringify(c,null,2));
+console.log('Switched to '+MODEL_ID);
+"
+```
+ 
+Replace `TARGET_MODEL_ID` with the actual model ID. After switching, tell the user the change will take effect after gateway reload. OpenClaw hot-reloads model config changes automatically.
+ 
+### Check balance and usage
+ 
+When the user asks "how much credit do I have", "還有多少額度", "餘額":
+ 
+```bash
+node -e "
+const f=process.env.HOME+'/.openclaw/openclaw.json';
+const c=require(f);
+const key=c.models.providers.clawrouter.apiKey;
+fetch('https://clawrouter.com/api/user/self',{headers:{Authorization:key,'New-API-User':'0'}})
+  .then(r=>r.json())
+  .then(d=>{
+    if(d.data){
+      const q=d.data.quota||0;
+      const u=d.data.used_quota||0;
+      const r=q-u;
+      console.log('Total quota: $'+(q/500000).toFixed(2));
+      console.log('Used: $'+(u/500000).toFixed(2));
+      console.log('Remaining: $'+(r/500000).toFixed(2));
+    } else console.log('Unable to fetch balance');
+  }).catch(e=>console.log('Error:',e.message));
+"
+```
+ 
+Note: The quota values from the API are in internal units. Divide by 500000 to get approximate USD value.
 ## Guardrails
 
 - If Turnstile is enabled and no `--turnstile-token` is provided, stop and report it.
