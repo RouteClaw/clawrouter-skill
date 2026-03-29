@@ -34,13 +34,15 @@ For automation, prefer JSON output:
 
 ```powershell
 node scripts/clawrouter-account-bootstrap.mjs bootstrap `
-  --base-url http://127.0.0.1:3000 `
+  --base-url https://clawrouter.com `
   --username demo-user `
   --password demo-password-123 `
   --register-mode if-missing `
   --with-access-token true `
   --output json
 ```
+
+For the official hosted service, you can also omit `--base-url` because the script already defaults to `https://clawrouter.com`.
 
 Useful subcommands:
 
